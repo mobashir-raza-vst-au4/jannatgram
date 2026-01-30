@@ -50,7 +50,6 @@ async function fetchStory(storyUrl: string): Promise<InstagramContent | null> {
 
     const result = response.data;
     if (!result || result.status !== 'ok' || !result.data) {
-      console.error('Story API error:', result?.message);
       return null;
     }
 
@@ -58,7 +57,6 @@ async function fetchStory(storyUrl: string): Promise<InstagramContent | null> {
     const media: MediaItem[] = [];
     const username = data.owner?.username || '';
 
-    // Check if it's a video story or image story
     if (data.video_hd) {
       media.push({
         url: data.video_hd,
@@ -77,8 +75,7 @@ async function fetchStory(storyUrl: string): Promise<InstagramContent | null> {
     }
 
     return null;
-  } catch (error) {
-    console.error('Story fetch error:', error);
+  } catch {
     return null;
   }
 }
@@ -99,7 +96,6 @@ async function fetchWithBulkScraper(shortcode: string, type: ContentType): Promi
 
     const result = response.data;
     if (!result || result.status === 'error' || !result.data) {
-      console.error('API error:', result?.message);
       return null;
     }
 
@@ -108,16 +104,13 @@ async function fetchWithBulkScraper(shortcode: string, type: ContentType): Promi
     const username = data.owner?.username || '';
     const caption = data.edge_media_to_caption?.edges?.[0]?.node?.text || '';
 
-    // Handle video content (reels, video posts)
     if (data.is_video && data.video_url) {
       media.push({
         url: data.video_url,
         type: 'video',
         thumbnail: data.display_url || data.thumbnail_src,
       });
-    }
-    // Handle carousel/sidecar posts
-    else if (data.edge_sidecar_to_children?.edges) {
+    } else if (data.edge_sidecar_to_children?.edges) {
       for (const edge of data.edge_sidecar_to_children.edges) {
         const node = edge.node;
         if (node.is_video && node.video_url) {
@@ -133,9 +126,7 @@ async function fetchWithBulkScraper(shortcode: string, type: ContentType): Promi
           });
         }
       }
-    }
-    // Handle single image post
-    else if (data.display_url) {
+    } else if (data.display_url) {
       media.push({
         url: data.display_url,
         type: 'image',
@@ -147,8 +138,7 @@ async function fetchWithBulkScraper(shortcode: string, type: ContentType): Promi
     }
 
     return null;
-  } catch (error) {
-    console.error('Bulk scraper error:', error);
+  } catch {
     return null;
   }
 }
@@ -209,22 +199,16 @@ export async function fetchInstagramContent(url: string): Promise<InstagramConte
   const { type, shortcode, cleanUrl } = parsed;
 
   if (!RAPIDAPI_KEY) {
-    throw new Error(
-      'API key required. Please add your RapidAPI key to .env.local file:\n' +
-      'RAPIDAPI_KEY=your_key_here'
-    );
+    throw new Error('API key required. Please configure the server.');
   }
 
   let content: InstagramContent | null = null;
 
   if (type === 'story') {
-    // Use story-specific endpoint
     content = await fetchStory(cleanUrl);
   } else {
-    // Use media_info for posts and reels
     content = await fetchWithBulkScraper(shortcode, type);
 
-    // Fallback to scraping
     if (!content) {
       content = await fetchWithScraping(shortcode, type);
     }
