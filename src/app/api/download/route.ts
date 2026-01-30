@@ -7,6 +7,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<DownloadR
     const body = await request.json();
     const { url } = body;
 
+    // Debug: Check if API key is available
+    const hasApiKey = !!process.env.RAPIDAPI_KEY;
+    console.log('API Key available:', hasApiKey, 'Key length:', process.env.RAPIDAPI_KEY?.length || 0);
+
     if (!url) {
       return NextResponse.json(
         { success: false, error: 'URL is required' },
