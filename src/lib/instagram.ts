@@ -36,10 +36,10 @@ export function parseInstagramUrl(
 }
 
 // ---------------------------------------------------------------------------
-// Defensive parser — reads media from ANY of the common response shapes, so a
-// provider changing field names often "just keeps working".
+// Shared helpers + a defensive parser for "media object" shaped responses.
 // ---------------------------------------------------------------------------
 type AnyNode = Record<string, unknown>;
+type Parsed = { type: ContentType; shortcode: string; cleanUrl: string };
 
 const clean = (u: string) => u.replace(/\\u0026/g, '&').replace(/\\/g, '');
 
@@ -53,6 +53,9 @@ function directUrl(u: string): string {
   }
 }
 
+const isVideoUrl = (u: string, ext?: string) =>
+  /\.(mp4|mov)(\?|$)/i.test(u) || /(mp4|mov|video)/i.test(ext || '');
+
 function firstImage(node: AnyNode): string | undefined {
   for (const k of ['display_url', 'thumbnail_url', 'image_hd', 'image', 'thumbnail_src'] as const) {
     if (typeof node[k] === 'string') return clean(node[k] as string);
@@ -63,23 +66,18 @@ function firstImage(node: AnyNode): string | undefined {
 }
 
 function nodeToMedia(node: AnyNode): MediaItem | null {
-  // 1) main_media_* (instagram-public-bulk-scraper)
   const mm = (typeof node.main_media_hd === 'string' && node.main_media_hd) ||
     (typeof node.main_media_sd === 'string' && node.main_media_sd);
   if (typeof mm === 'string') {
     const isVideo = node.main_media_type === 'video';
     return { url: directUrl(clean(mm)), type: isVideo ? 'video' : 'image', thumbnail: isVideo ? firstImage(node) : undefined };
   }
-  // 2) video fields (various providers / GraphQL / private API)
   const video =
     (typeof node.video_url === 'string' && node.video_url) ||
     (typeof node.video_hd === 'string' && node.video_hd) ||
     (typeof node.video === 'string' && node.video) ||
     ((node.video_versions as AnyNode[] | undefined)?.[0]?.url as string | undefined);
-  if (typeof video === 'string') {
-    return { url: directUrl(clean(video)), type: 'video', thumbnail: firstImage(node) };
-  }
-  // 3) image fields
+  if (typeof video === 'string') return { url: directUrl(clean(video)), type: 'video', thumbnail: firstImage(node) };
   const img = firstImage(node);
   if (img) return { url: directUrl(img), type: 'image' };
   return null;
@@ -115,21 +113,7 @@ function extractCaption(data: AnyNode): string {
   const cap = data.caption as AnyNode | string | undefined;
   if (typeof cap === 'string') return cap;
   if (cap && typeof (cap as AnyNode).text === 'string') return (cap as AnyNode).text as string;
-  const edge = (data.edge_media_to_caption as AnyNode | undefined)?.edges as AnyNode[] | undefined;
-  const text = (edge?.[0]?.node as AnyNode | undefined)?.text;
-  return typeof text === 'string' ? text : '';
-}
-
-// ---------------------------------------------------------------------------
-// Providers — tried in order. To add/replace one (e.g. when an API dies),
-// subscribe to it on RapidAPI and add an entry here. Each returns the media
-// `data` object (or null); errors are caught and move on to the next provider.
-// ---------------------------------------------------------------------------
-interface Provider {
-  name: string;
-  enabled: boolean;
-  host: string;
-  fetch: (args: { shortcode: string; cleanUrl: string }) => Promise<AnyNode | null>;
+  return '';
 }
 
 async function rapidGet(host: string, path: string, params: Record<string, string>): Promise<AnyNode> {
@@ -141,45 +125,87 @@ async function rapidGet(host: string, path: string, params: Record<string, strin
   return res.data as AnyNode;
 }
 
+async function rapidPost(host: string, path: string, body: Record<string, unknown>): Promise<unknown> {
+  const res = await axios.post(`https://${host}${path}`, body, {
+    headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': host, 'Content-Type': 'application/json' },
+    timeout: 30000,
+  });
+  return res.data;
+}
+
+// ---------------------------------------------------------------------------
+// Providers — tried in order until one returns media. Each parses its own
+// response shape and returns a full InstagramContent (or null). To add a new
+// one when an API dies: subscribe on RapidAPI and add an entry here.
+// ---------------------------------------------------------------------------
+interface Provider {
+  name: string;
+  enabled: boolean;
+  fetch: (p: Parsed) => Promise<InstagramContent | null>;
+}
+
 const PROVIDERS: Provider[] = [
   {
-    // Currently subscribed & working.
     name: 'instagram-public-bulk-scraper',
     enabled: true,
-    host: 'instagram-public-bulk-scraper.p.rapidapi.com',
-    fetch: async ({ cleanUrl, shortcode }) => {
-      let r = await rapidGet('instagram-public-bulk-scraper.p.rapidapi.com', '/v1/download_media', {
-        code_or_id_or_url: cleanUrl,
-      });
-      if (r?.status !== 'ok' || !r?.data) {
-        r = await rapidGet('instagram-public-bulk-scraper.p.rapidapi.com', '/v1/download_media', {
-          code_or_id_or_url: shortcode,
-        });
-      }
-      return r?.status === 'ok' && r?.data ? (r.data as AnyNode) : null;
+    fetch: async ({ type, cleanUrl, shortcode }) => {
+      const host = 'instagram-public-bulk-scraper.p.rapidapi.com';
+      let r = await rapidGet(host, '/v1/download_media', { code_or_id_or_url: cleanUrl });
+      if (r?.status !== 'ok' || !r?.data) r = await rapidGet(host, '/v1/download_media', { code_or_id_or_url: shortcode });
+      const data = r?.status === 'ok' && r?.data ? (r.data as AnyNode) : null;
+      if (!data) return null;
+      const media = extractMedia(data);
+      if (!media.length) return null;
+      return { type, username: extractUsername(data), caption: extractCaption(data), media };
     },
   },
   {
-    // Backup. Disabled until you subscribe to it on RapidAPI (then flip enabled).
-    name: 'instagram-scraper-api2',
-    enabled: false,
-    host: 'instagram-scraper-api2.p.rapidapi.com',
-    fetch: async ({ cleanUrl }) => {
-      const r = await rapidGet('instagram-scraper-api2.p.rapidapi.com', '/v1/post_info', {
-        code_or_id_or_url: cleanUrl,
-      });
-      return (r?.data as AnyNode) ?? null;
+    name: 'instagram120',
+    enabled: true,
+    fetch: async ({ type, cleanUrl }) => {
+      const host = 'instagram120.p.rapidapi.com';
+      const arr = (await rapidPost(host, '/api/instagram/links', { url: cleanUrl })) as AnyNode[];
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      const media: MediaItem[] = [];
+      let caption = '';
+      for (const item of arr) {
+        const urls = item?.urls as AnyNode[] | undefined;
+        const first = urls?.[0];
+        const u = first?.url as string | undefined;
+        if (!u) continue;
+        media.push({
+          url: u,
+          type: isVideoUrl(u, first?.extension as string | undefined) ? 'video' : 'image',
+          thumbnail: (item.pictureUrl as string) || undefined,
+        });
+        const title = (item.meta as AnyNode | undefined)?.title;
+        if (!caption && typeof title === 'string') caption = title;
+      }
+      if (!media.length) return null;
+      return { type, username: '', caption, media };
     },
   },
 ];
 
-// Last-resort direct scrape (usually blocked on server IPs, kept as a safety net).
-async function fetchWithScraping(shortcode: string, type: ContentType): Promise<AnyNode | null> {
+/** Story path (bulk-scraper). Stories generally require login and often fail. */
+async function fetchStory(storyUrl: string, type: ContentType): Promise<InstagramContent | null> {
+  try {
+    const r = await rapidGet('instagram-public-bulk-scraper.p.rapidapi.com', '/v1/download_story_by_url', { url: storyUrl });
+    const data = r?.status === 'ok' && r?.data ? (r.data as AnyNode) : null;
+    if (!data) return null;
+    const media = extractMedia(data);
+    if (!media.length) return null;
+    return { type, username: extractUsername(data), caption: '', media };
+  } catch {
+    return null;
+  }
+}
+
+/** Last-resort direct scrape (usually blocked on server IPs). */
+async function fetchWithScraping(shortcode: string, type: ContentType): Promise<InstagramContent | null> {
   try {
     const postUrl =
-      type === 'reel'
-        ? `https://www.instagram.com/reel/${shortcode}/`
-        : `https://www.instagram.com/p/${shortcode}/`;
+      type === 'reel' ? `https://www.instagram.com/reel/${shortcode}/` : `https://www.instagram.com/p/${shortcode}/`;
     const response = await axios.get(postUrl, {
       headers: { 'User-Agent': 'Instagram 219.0.0.12.117 Android', Accept: '*/*' },
       timeout: 15000,
@@ -187,36 +213,27 @@ async function fetchWithScraping(shortcode: string, type: ContentType): Promise<
     const html = response.data as string;
     const video = html.match(/"video_url":"([^"]+)"/)?.[1];
     const image = html.match(/"display_url":"([^"]+)"/)?.[1];
-    const username = html.match(/"username":"([^"]+)"/)?.[1];
-    if (video) return { video_url: clean(video), owner: { username } };
-    if (image && type !== 'reel') return { display_url: clean(image), owner: { username } };
-    return null;
+    const username = html.match(/"username":"([^"]+)"/)?.[1] || '';
+    const media: MediaItem[] = [];
+    if (video) media.push({ url: clean(video), type: 'video' });
+    else if (image && type !== 'reel') media.push({ url: clean(image), type: 'image' });
+    if (!media.length) return null;
+    return { type, username, caption: '', media };
   } catch {
     return null;
   }
 }
 
-async function fetchStory(storyUrl: string): Promise<AnyNode | null> {
-  try {
-    const r = await rapidGet('instagram-public-bulk-scraper.p.rapidapi.com', '/v1/download_story_by_url', {
-      url: storyUrl,
-    });
-    return r?.status === 'ok' && r?.data ? (r.data as AnyNode) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Debug helper: returns each provider's raw response so you can inspect a
- *  changed shape without redeploying (send { debug: true } to /api/download). */
+/** Debug helper — returns each provider's outcome so you can diagnose a
+ *  changed API without redeploying (send { debug: true } to /api/download). */
 export async function debugFetch(url: string): Promise<unknown> {
   const parsed = parseInstagramUrl(url);
   if (!parsed) return { error: 'invalid url' };
   const out: unknown[] = [];
   for (const p of PROVIDERS) {
     try {
-      const data = await p.fetch(parsed);
-      out.push({ provider: p.name, enabled: p.enabled, ok: !!data, dataKeys: data ? Object.keys(data) : null, sample: data });
+      const c = await p.fetch(parsed);
+      out.push({ provider: p.name, enabled: p.enabled, ok: !!c?.media.length, media: c?.media.length ?? 0 });
     } catch (e) {
       const err = e as { response?: { status?: number; data?: unknown } };
       out.push({ provider: p.name, enabled: p.enabled, error: true, status: err.response?.status, body: err.response?.data });
@@ -232,18 +249,17 @@ export async function fetchInstagramContent(url: string): Promise<InstagramConte
 
   const { type, shortcode, cleanUrl } = parsed;
 
-  let data: AnyNode | null = null;
+  let content: InstagramContent | null = null;
 
   if (type === 'story') {
-    data = await fetchStory(cleanUrl);
+    content = await fetchStory(cleanUrl, type);
   } else {
-    // Try each enabled provider in order; fall back to direct scraping.
     for (const p of PROVIDERS) {
       if (!p.enabled) continue;
       try {
-        const d = await p.fetch(parsed);
-        if (d && extractMedia(d).length > 0) {
-          data = d;
+        const c = await p.fetch(parsed);
+        if (c && c.media.length > 0) {
+          content = c;
           break;
         }
         console.warn(`[instagram] provider "${p.name}" returned no usable media`);
@@ -252,17 +268,14 @@ export async function fetchInstagramContent(url: string): Promise<InstagramConte
         console.error(`[instagram] provider "${p.name}" failed:`, err.response?.status, err.response?.data?.message || (e as Error).message);
       }
     }
-    if (!data) data = await fetchWithScraping(shortcode, type);
+    if (!content) content = await fetchWithScraping(shortcode, type);
   }
 
-  const media = data ? extractMedia(data) : [];
-  if (!data || media.length === 0) {
-    throw new Error('Unable to fetch content. The post may be private/deleted, or the scraper API changed — try again, or send { "debug": true } to inspect the raw response.');
+  if (!content || content.media.length === 0) {
+    throw new Error('Unable to fetch content. The post may be private/deleted, or the scraper APIs changed — send { "debug": true } to inspect.');
   }
-
-  if (type === 'reel' && media.every((m) => m.type === 'image')) {
+  if (type === 'reel' && content.media.every((m) => m.type === 'image')) {
     throw new Error('Could not extract video. The reel may be private or restricted.');
   }
-
-  return { type, username: extractUsername(data), caption: extractCaption(data), media };
+  return content;
 }
