@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchInstagramContent, parseInstagramUrl } from '@/lib/instagram';
+import { fetchInstagramContent, parseInstagramUrl, debugFetch } from '@/lib/instagram';
 import { DownloadResponse } from '@/types';
 
 export async function POST(request: NextRequest): Promise<NextResponse<DownloadResponse>> {
   try {
     const body = await request.json();
-    const { url } = body;
+    const { url, debug } = body;
 
     if (!url) {
       return NextResponse.json(
         { success: false, error: 'URL is required' },
         { status: 400 }
       );
+    }
+
+    // Diagnostic mode: inspect raw provider responses without redeploying.
+    if (debug) {
+      return NextResponse.json({ success: true, debug: await debugFetch(url) });
     }
 
     // Validate URL format

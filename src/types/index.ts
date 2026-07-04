@@ -18,4 +18,6 @@ export interface DownloadResponse {
   success: boolean;
   data?: InstagramContent;
   error?: string;
+  /** Raw provider responses, returned when the request is sent with { debug: true }. */
+  debug?: unknown;
 }
