@@ -1,7 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { InstagramContent, MediaItem, YouTubeContent, YouTubeFormat } from "@/types";
+
+// When set (e.g. on the Vercel site, which can't run yt-dlp), YouTube fetches
+// hand off to the app that can (Railway). Unset on the backend host itself.
+const YT_REDIRECT = process.env.NEXT_PUBLIC_YT_REDIRECT_HOST;
 
 const DownloadIcon = ({ className = "w-5 h-5" }: { className?: string }) => (
   <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -146,13 +150,19 @@ export default function Home() {
   };
 
   // ---- YouTube handlers ----
-  const handleYtSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const runYtFetch = async (rawUrl: string) => {
+    const trimmed = rawUrl.trim();
     setYtError("");
     setYtContent(null);
 
-    if (!ytUrl.trim()) {
+    if (!trimmed) {
       setYtError("Please enter a YouTube URL");
+      return;
+    }
+
+    // This host has no backend (Vercel) — send the user to the downloader app.
+    if (YT_REDIRECT) {
+      window.location.href = `${YT_REDIRECT.replace(/\/$/, "")}/?ytUrl=${encodeURIComponent(trimmed)}`;
       return;
     }
 
@@ -161,7 +171,7 @@ export default function Home() {
       const response = await fetch("/api/youtube", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: ytUrl.trim() }),
+        body: JSON.stringify({ url: trimmed }),
       });
       const data = await response.json();
       if (!data.success) {
@@ -175,6 +185,24 @@ export default function Home() {
       setYtLoading(false);
     }
   };
+
+  const handleYtSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    runYtFetch(ytUrl);
+  };
+
+  // If arriving with ?ytUrl=… (handed off from the Vercel site), open the
+  // YouTube tab, prefill, and auto-fetch — then clean the address bar.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const yt = params.get("ytUrl");
+    if (yt) {
+      setTab("youtube");
+      setYtUrl(yt);
+      runYtFetch(yt);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   const sanitize = (name: string) =>
     name.replace(/[^\w\-. ]+/g, "").trim().slice(0, 80) || "youtube";
@@ -578,11 +606,19 @@ export default function Home() {
                           <Spinner />
                           Loading...
                         </span>
+                      ) : YT_REDIRECT ? (
+                        "Fetch →"
                       ) : (
                         "Fetch"
                       )}
                     </button>
                   </div>
+                  {YT_REDIRECT && (
+                    <p className="text-xs text-gray-400 mt-2">
+                      YouTube downloads open in our downloader app for the best
+                      quality and speed.
+                    </p>
+                  )}
                 </form>
 
                 {/* Error Message */}
