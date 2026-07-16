@@ -1,15 +1,66 @@
 "use client";
 
 import { useState } from "react";
-import { InstagramContent, MediaItem } from "@/types";
+import { InstagramContent, MediaItem, YouTubeContent, YouTubeFormat } from "@/types";
+
+const DownloadIcon = ({ className = "w-5 h-5" }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+    />
+  </svg>
+);
+
+const Spinner = ({ className = "w-5 h-5" }: { className?: string }) => (
+  <svg className={`animate-spin ${className}`} viewBox="0 0 24 24">
+    <circle
+      className="opacity-25"
+      cx="12"
+      cy="12"
+      r="10"
+      stroke="currentColor"
+      strokeWidth="4"
+      fill="none"
+    />
+    <path
+      className="opacity-75"
+      fill="currentColor"
+      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+    />
+  </svg>
+);
+
+function formatDuration(seconds?: number): string {
+  if (!seconds || seconds <= 0) return "";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+type Tab = "instagram" | "youtube";
 
 export default function Home() {
+  const [tab, setTab] = useState<Tab>("instagram");
+
+  // Instagram state
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [content, setContent] = useState<InstagramContent | null>(null);
   const [downloadingIndex, setDownloadingIndex] = useState<number | null>(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
+
+  // YouTube state
+  const [ytUrl, setYtUrl] = useState("");
+  const [ytLoading, setYtLoading] = useState(false);
+  const [ytError, setYtError] = useState("");
+  const [ytContent, setYtContent] = useState<YouTubeContent | null>(null);
+  const [ytDownloadingKey, setYtDownloadingKey] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,9 +145,82 @@ export default function Home() {
     }
   };
 
+  // ---- YouTube handlers ----
+  const handleYtSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setYtError("");
+    setYtContent(null);
+
+    if (!ytUrl.trim()) {
+      setYtError("Please enter a YouTube URL");
+      return;
+    }
+
+    setYtLoading(true);
+    try {
+      const response = await fetch("/api/youtube", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: ytUrl.trim() }),
+      });
+      const data = await response.json();
+      if (!data.success) {
+        setYtError(data.error || "Failed to fetch video");
+        return;
+      }
+      setYtContent(data.data);
+    } catch {
+      setYtError("Network error. Please try again.");
+    } finally {
+      setYtLoading(false);
+    }
+  };
+
+  const sanitize = (name: string) =>
+    name.replace(/[^\w\-. ]+/g, "").trim().slice(0, 80) || "youtube";
+
+  const downloadYtFormat = async (fmt: YouTubeFormat, key: string) => {
+    setYtDownloadingKey(key);
+    try {
+      // fmt.url is our own /api/youtube/download endpoint — it runs yt-dlp +
+      // ffmpeg server-side and streams back a merged file. Can take a while.
+      const response = await fetch(fmt.url);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Download failed");
+      }
+      const blob = await response.blob();
+
+      const base = sanitize(ytContent?.title || "youtube");
+      const suffix = fmt.kind === "audio" ? fmt.extension : fmt.quality;
+      const filename = `${base}_${suffix}.${fmt.extension}`;
+
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (e) {
+      setYtError(e instanceof Error ? e.message : "Download failed. Please try again.");
+    } finally {
+      setYtDownloadingKey(null);
+    }
+  };
+
+  const anyYtDownloading = ytDownloadingKey !== null;
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600">
-      <div className="container mx-auto px-4 py-12">
+    <div className="relative min-h-screen bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600">
+      {/* YouTube gradient cross-fades in over the base gradient on tab switch */}
+      <div
+        className={`pointer-events-none fixed inset-0 bg-gradient-to-br from-red-500 via-rose-600 to-purple-800 transition-opacity duration-700 ease-in-out ${
+          tab === "youtube" ? "opacity-100" : "opacity-0"
+        }`}
+      />
+      <div className="relative container mx-auto px-4 py-12">
         {/* Header */}
         <header className="text-center mb-12">
           {/* Custom Logo for Jannat */}
@@ -150,319 +274,500 @@ export default function Home() {
 
           <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">
             <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-pink-100 to-white">
-              JannatGram
+              {tab === "youtube" ? "JannaTube" : "JannatGram"}
             </span>
           </h1>
           <p className="text-lg text-pink-100 mb-4 italic">
             &quot;Jannat&quot; means Paradise - Save your precious moments
           </p>
           <p className="text-xl text-white/90 max-w-2xl mx-auto">
-            Download Instagram posts, reels, and stories instantly with love
+            Download Instagram posts &amp; reels and YouTube videos in high quality
           </p>
         </header>
 
         {/* Main Card */}
         <div className="max-w-2xl mx-auto">
           <div className="bg-white rounded-3xl shadow-2xl p-8">
-            {/* URL Input Form */}
-            <form onSubmit={handleSubmit} className="mb-6">
-              <label
-                htmlFor="url"
-                className="block text-gray-700 font-semibold mb-3"
+            {/* Tab Switcher */}
+            <div className="flex gap-2 mb-6 p-1 bg-gray-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setTab("instagram")}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg font-semibold transition-all ${
+                  tab === "instagram"
+                    ? "bg-white text-pink-600 shadow"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
               >
-                Paste Instagram URL
-              </label>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="text"
-                  id="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://www.instagram.com/p/..."
-                  className="flex-1 px-5 py-4 border-2 border-gray-200 rounded-xl focus:border-pink-500 focus:outline-none transition-colors text-gray-800 placeholder-gray-400"
-                  disabled={loading}
-                />
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-8 py-4 bg-gradient-to-r from-rose-500 to-pink-600 text-white font-semibold rounded-xl hover:from-rose-600 hover:to-pink-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
-                >
-                  {loading ? (
-                    <span className="flex items-center justify-center gap-2">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z" />
+                </svg>
+                Instagram
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("youtube")}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg font-semibold transition-all ${
+                  tab === "youtube"
+                    ? "bg-white text-red-600 shadow"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                </svg>
+                YouTube
+              </button>
+            </div>
+
+            {/* ===================== INSTAGRAM TAB ===================== */}
+            {tab === "instagram" && (
+              <>
+                {/* URL Input Form */}
+                <form onSubmit={handleSubmit} className="mb-6">
+                  <label
+                    htmlFor="url"
+                    className="block text-gray-700 font-semibold mb-3"
+                  >
+                    Paste Instagram URL
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="text"
+                      id="url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder="https://www.instagram.com/p/..."
+                      className="flex-1 px-5 py-4 border-2 border-gray-200 rounded-xl focus:border-pink-500 focus:outline-none transition-colors text-gray-800 placeholder-gray-400"
+                      disabled={loading}
+                    />
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="px-8 py-4 bg-gradient-to-r from-rose-500 to-pink-600 text-white font-semibold rounded-xl hover:from-rose-600 hover:to-pink-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                    >
+                      {loading ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <Spinner />
+                          Loading...
+                        </span>
+                      ) : (
+                        "Download"
+                      )}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Error Message */}
+                {error && (
+                  <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600">
+                    <div className="flex items-start gap-3">
                       <svg
-                        className="animate-spin h-5 w-5"
-                        viewBox="0 0 24 24"
+                        className="w-5 h-5 mt-0.5 flex-shrink-0"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
                       >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                          fill="none"
-                        />
                         <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          fillRule="evenodd"
+                          d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                          clipRule="evenodd"
                         />
                       </svg>
-                      Loading...
-                    </span>
-                  ) : (
-                    "Download"
-                  )}
-                </button>
-              </div>
-            </form>
-
-            {/* Error Message */}
-            {error && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600">
-                <div className="flex items-start gap-3">
-                  <svg
-                    className="w-5 h-5 mt-0.5 flex-shrink-0"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  <p>{error}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Results */}
-            {content && (
-              <div className="border-t border-gray-100 pt-6">
-                {/* User Info */}
-                {content.username && (
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold">
-                      {content.username.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-gray-800">
-                        @{content.username}
-                      </p>
-                      <p className="text-sm text-gray-500 capitalize">
-                        {content.type}
-                      </p>
+                      <p>{error}</p>
                     </div>
                   </div>
                 )}
 
-                {/* Caption */}
-                {content.caption && (
-                  <p className="text-gray-600 mb-6 line-clamp-3">
-                    {content.caption}
-                  </p>
-                )}
+                {/* Results */}
+                {content && (
+                  <div className="border-t border-gray-100 pt-6">
+                    {/* User Info */}
+                    {content.username && (
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold">
+                          {content.username.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-gray-800">
+                            @{content.username}
+                          </p>
+                          <p className="text-sm text-gray-500 capitalize">
+                            {content.type}
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
-                {/* Media Grid */}
-                <div
-                  className={`grid gap-4 mb-6 ${
-                    content.media.length === 1
-                      ? "grid-cols-1"
-                      : "grid-cols-2"
-                  }`}
-                >
-                  {content.media.map((media, index) => (
+                    {/* Caption */}
+                    {content.caption && (
+                      <p className="text-gray-600 mb-6 line-clamp-3">
+                        {content.caption}
+                      </p>
+                    )}
+
+                    {/* Media Grid */}
                     <div
-                      key={index}
-                      className="relative group rounded-xl overflow-hidden bg-gray-100"
+                      className={`grid gap-4 mb-6 ${
+                        content.media.length === 1
+                          ? "grid-cols-1"
+                          : "grid-cols-2"
+                      }`}
                     >
-                      {media.type === "video" ? (
-                        <div className="relative aspect-square bg-gray-900">
-                          {media.thumbnail ? (
+                      {content.media.map((media, index) => (
+                        <div
+                          key={index}
+                          className="relative group rounded-xl overflow-hidden bg-gray-100"
+                        >
+                          {media.type === "video" ? (
+                            <div className="relative aspect-square bg-gray-900">
+                              {media.thumbnail ? (
+                                <img
+                                  src={getProxyUrl(media.thumbnail)}
+                                  alt={`Media ${index + 1}`}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              ) : null}
+                              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/50 to-pink-900/50">
+                                <svg
+                                  className="w-16 h-16 text-white/80"
+                                  fill="currentColor"
+                                  viewBox="0 0 20 20"
+                                >
+                                  <path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" />
+                                </svg>
+                              </div>
+                            </div>
+                          ) : (
                             <img
-                              src={getProxyUrl(media.thumbnail)}
+                              src={getProxyUrl(media.url)}
                               alt={`Media ${index + 1}`}
-                              className="w-full h-full object-cover"
+                              className="w-full aspect-square object-cover"
                               onError={(e) => {
-                                e.currentTarget.style.display = 'none';
+                                e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="%23ddd" width="100" height="100"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%23999">Image</text></svg>';
                               }}
                             />
-                          ) : null}
-                          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/50 to-pink-900/50">
-                            <svg
-                              className="w-16 h-16 text-white/80"
-                              fill="currentColor"
-                              viewBox="0 0 20 20"
+                          )}
+
+                          {/* Download Button Overlay */}
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                            <button
+                              onClick={() => downloadMedia(media, index)}
+                              disabled={downloadingIndex === index || downloadingAll}
+                              className="px-4 py-2 bg-white rounded-lg font-semibold text-gray-800 hover:bg-gray-100 transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
                             >
-                              <path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" />
-                            </svg>
+                              {downloadingIndex === index ? (
+                                <>
+                                  <Spinner />
+                                  Downloading...
+                                </>
+                              ) : (
+                                <>
+                                  <DownloadIcon />
+                                  Download
+                                </>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Media Type Badge */}
+                          <div className="absolute top-2 right-2">
+                            <span
+                              className={`px-2 py-1 rounded text-xs font-semibold ${
+                                media.type === "video"
+                                  ? "bg-red-500 text-white"
+                                  : "bg-blue-500 text-white"
+                              }`}
+                            >
+                              {media.type === "video" ? "VIDEO" : "PHOTO"}
+                            </span>
                           </div>
                         </div>
+                      ))}
+                    </div>
+
+                    {/* Download All Button */}
+                    <button
+                      onClick={downloadAll}
+                      disabled={downloadingAll || downloadingIndex !== null}
+                      className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {downloadingAll ? (
+                        <>
+                          <Spinner />
+                          Downloading...
+                        </>
                       ) : (
+                        <>
+                          <DownloadIcon />
+                          Download All ({content.media.length}{" "}
+                          {content.media.length === 1 ? "file" : "files"})
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Supported Formats */}
+                {!content && !error && (
+                  <div className="border-t border-gray-100 pt-6">
+                    <p className="text-center text-gray-500 mb-4">
+                      Supported content types:
+                    </p>
+                    <div className="flex flex-wrap justify-center gap-3">
+                      {[
+                        { name: "Posts", icon: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" },
+                        { name: "Reels", icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" },
+                        { name: "Stories", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
+                      ].map((item) => (
+                        <div
+                          key={item.name}
+                          className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-full text-gray-700"
+                        >
+                          <svg
+                            className="w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d={item.icon}
+                            />
+                          </svg>
+                          {item.name}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ===================== YOUTUBE TAB ===================== */}
+            {tab === "youtube" && (
+              <>
+                <form onSubmit={handleYtSubmit} className="mb-6">
+                  <label
+                    htmlFor="yturl"
+                    className="block text-gray-700 font-semibold mb-3"
+                  >
+                    Paste YouTube URL
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="text"
+                      id="yturl"
+                      value={ytUrl}
+                      onChange={(e) => setYtUrl(e.target.value)}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      className="flex-1 px-5 py-4 border-2 border-gray-200 rounded-xl focus:border-red-500 focus:outline-none transition-colors text-gray-800 placeholder-gray-400"
+                      disabled={ytLoading}
+                    />
+                    <button
+                      type="submit"
+                      disabled={ytLoading}
+                      className="px-8 py-4 bg-gradient-to-r from-red-500 to-red-600 text-white font-semibold rounded-xl hover:from-red-600 hover:to-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                    >
+                      {ytLoading ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <Spinner />
+                          Loading...
+                        </span>
+                      ) : (
+                        "Fetch"
+                      )}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Error Message */}
+                {ytError && (
+                  <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600">
+                    <div className="flex items-start gap-3">
+                      <svg
+                        className="w-5 h-5 mt-0.5 flex-shrink-0"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                      <p>{ytError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Results */}
+                {ytContent && (
+                  <div className="border-t border-gray-100 pt-6">
+                    {/* Video info */}
+                    <div className="flex gap-4 mb-6">
+                      {ytContent.thumbnail && (
                         <img
-                          src={getProxyUrl(media.url)}
-                          alt={`Media ${index + 1}`}
-                          className="w-full aspect-square object-cover"
+                          src={getProxyUrl(ytContent.thumbnail)}
+                          alt="thumbnail"
+                          className="w-40 aspect-video object-cover rounded-lg bg-gray-100 flex-shrink-0"
                           onError={(e) => {
-                            e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="%23ddd" width="100" height="100"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%23999">Image</text></svg>';
+                            e.currentTarget.style.display = "none";
                           }}
                         />
                       )}
-
-                      {/* Download Button Overlay */}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                        <button
-                          onClick={() => downloadMedia(media, index)}
-                          disabled={downloadingIndex === index || downloadingAll}
-                          className="px-4 py-2 bg-white rounded-lg font-semibold text-gray-800 hover:bg-gray-100 transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                        >
-                          {downloadingIndex === index ? (
-                            <>
-                              <svg
-                                className="animate-spin w-5 h-5"
-                                viewBox="0 0 24 24"
-                              >
-                                <circle
-                                  className="opacity-25"
-                                  cx="12"
-                                  cy="12"
-                                  r="10"
-                                  stroke="currentColor"
-                                  strokeWidth="4"
-                                  fill="none"
-                                />
-                                <path
-                                  className="opacity-75"
-                                  fill="currentColor"
-                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                />
-                              </svg>
-                              Downloading...
-                            </>
-                          ) : (
-                            <>
-                              <svg
-                                className="w-5 h-5"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                />
-                              </svg>
-                              Download
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Media Type Badge */}
-                      <div className="absolute top-2 right-2">
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-semibold ${
-                            media.type === "video"
-                              ? "bg-red-500 text-white"
-                              : "bg-blue-500 text-white"
-                          }`}
-                        >
-                          {media.type === "video" ? "VIDEO" : "PHOTO"}
-                        </span>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-800 line-clamp-2">
+                          {ytContent.title}
+                        </p>
+                        {ytContent.author && (
+                          <p className="text-sm text-gray-500 mt-1">
+                            {ytContent.author}
+                          </p>
+                        )}
+                        {ytContent.lengthSeconds ? (
+                          <p className="text-sm text-gray-400 mt-1">
+                            {formatDuration(ytContent.lengthSeconds)}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
-                  ))}
-                </div>
 
-                {/* Download All Button */}
-                <button
-                  onClick={downloadAll}
-                  disabled={downloadingAll || downloadingIndex !== null}
-                  className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {downloadingAll ? (
-                    <>
-                      <svg
-                        className="animate-spin w-5 h-5"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                          fill="none"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        />
-                      </svg>
-                      Downloading...
-                    </>
-                  ) : (
-                    <>
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                        />
-                      </svg>
-                      Download All ({content.media.length}{" "}
-                      {content.media.length === 1 ? "file" : "files"})
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
+                    {/* Video formats */}
+                    {ytContent.videoFormats.length > 0 && (
+                      <div className="mb-6">
+                        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                          Video
+                        </h3>
+                        <div className="space-y-2">
+                          {ytContent.videoFormats.map((fmt, i) => {
+                            const key = `v-${i}`;
+                            return (
+                              <div
+                                key={key}
+                                className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-xl"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="px-2.5 py-1 bg-gray-800 text-white rounded-lg text-sm font-bold flex-shrink-0">
+                                    {fmt.quality}
+                                  </span>
+                                  <span className="text-xs uppercase text-gray-400 font-semibold">
+                                    {fmt.extension}
+                                  </span>
+                                  {fmt.sizeText && (
+                                    <span className="text-sm text-gray-500">
+                                      {fmt.sizeText}
+                                    </span>
+                                  )}
+                                  <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                    with audio
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={() => downloadYtFormat(fmt, key)}
+                                  disabled={anyYtDownloading}
+                                  className="px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg font-semibold hover:from-red-600 hover:to-red-700 transition-all flex items-center gap-2 flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {ytDownloadingKey === key ? (
+                                    <>
+                                      <Spinner className="w-4 h-4" />
+                                      <span className="hidden sm:inline">Downloading...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <DownloadIcon className="w-4 h-4" />
+                                      <span className="hidden sm:inline">Download</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-2">
+                          Every resolution downloads as one MP4 with audio (merged on
+                          the server), so higher qualities take a few extra seconds.
+                        </p>
+                      </div>
+                    )}
 
-            {/* Supported Formats */}
-            {!content && !error && (
-              <div className="border-t border-gray-100 pt-6">
-                <p className="text-center text-gray-500 mb-4">
-                  Supported content types:
-                </p>
-                <div className="flex flex-wrap justify-center gap-3">
-                  {[
-                    { name: "Posts", icon: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" },
-                    { name: "Reels", icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" },
-                    { name: "Stories", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
-                  ].map((item) => (
-                    <div
-                      key={item.name}
-                      className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-full text-gray-700"
-                    >
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d={item.icon}
-                        />
-                      </svg>
-                      {item.name}
+                    {/* Audio formats */}
+                    {ytContent.audioFormats.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                          Audio only
+                        </h3>
+                        <div className="space-y-2">
+                          {ytContent.audioFormats.map((fmt, i) => {
+                            const key = `a-${i}`;
+                            return (
+                              <div
+                                key={key}
+                                className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-xl"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="px-2.5 py-1 bg-purple-600 text-white rounded-lg text-sm font-bold flex-shrink-0">
+                                    {fmt.quality}
+                                  </span>
+                                  <span className="text-xs uppercase text-gray-400 font-semibold">
+                                    {fmt.extension}
+                                  </span>
+                                  {fmt.sizeText && (
+                                    <span className="text-sm text-gray-500">
+                                      {fmt.sizeText}
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => downloadYtFormat(fmt, key)}
+                                  disabled={anyYtDownloading}
+                                  className="px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg font-semibold hover:from-purple-600 hover:to-purple-700 transition-all flex items-center gap-2 flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {ytDownloadingKey === key ? (
+                                    <>
+                                      <Spinner className="w-4 h-4" />
+                                      <span className="hidden sm:inline">Downloading...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <DownloadIcon className="w-4 h-4" />
+                                      <span className="hidden sm:inline">Download</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Placeholder */}
+                {!ytContent && !ytError && (
+                  <div className="border-t border-gray-100 pt-6">
+                    <p className="text-center text-gray-500 mb-4">
+                      Paste any YouTube link — videos, Shorts, or youtu.be — and pick your quality.
+                    </p>
+                    <div className="flex flex-wrap justify-center gap-3">
+                      {["4K / 1080p", "720p / 480p", "Audio (M4A)"].map((label) => (
+                        <div
+                          key={label}
+                          className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-full text-gray-700"
+                        >
+                          <DownloadIcon />
+                          {label}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -475,8 +780,7 @@ export default function Home() {
                   1
                 </span>
                 <span>
-                  Copy the Instagram post, reel, or story URL from the app or
-                  browser
+                  Choose the Instagram or YouTube tab and copy the link
                 </span>
               </li>
               <li className="flex items-start gap-3">
@@ -490,7 +794,7 @@ export default function Home() {
                   3
                 </span>
                 <span>
-                  Click Download and save your content
+                  Pick your quality and save your content
                 </span>
               </li>
             </ol>
@@ -498,36 +802,47 @@ export default function Home() {
 
           {/* API Setup Guide */}
           <div className="mt-4 bg-white/10 backdrop-blur rounded-2xl p-6 text-white">
-            <h2 className="text-xl font-bold mb-4">API Setup (Required for Videos)</h2>
+            <h2 className="text-xl font-bold mb-4">API Setup (Required)</h2>
             <ol className="space-y-3 text-sm">
               <li className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 bg-white/20 rounded-full flex items-center justify-center text-xs font-bold">
                   1
                 </span>
                 <span>
-                  Go to{" "}
+                  Sign up on{" "}
                   <a
-                    href="https://rapidapi.com/social-starter-api-social-starter-api-default/api/instagram-scraper-api2"
+                    href="https://rapidapi.com/"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline font-semibold hover:text-pink-200"
                   >
-                    RapidAPI Instagram Scraper
+                    RapidAPI
                   </a>{" "}
-                  and sign up for free
+                  (free)
                 </span>
               </li>
               <li className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 bg-white/20 rounded-full flex items-center justify-center text-xs font-bold">
                   2
                 </span>
-                <span>Subscribe to the free plan (500 requests/month)</span>
+                <span>
+                  Subscribe to an Instagram scraper API and the{" "}
+                  <a
+                    href="https://rapidapi.com/ytjar/api/youtube-media-downloader"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline font-semibold hover:text-pink-200"
+                  >
+                    YouTube Media Downloader
+                  </a>{" "}
+                  API (free tiers available)
+                </span>
               </li>
               <li className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 bg-white/20 rounded-full flex items-center justify-center text-xs font-bold">
                   3
                 </span>
-                <span>Copy your API key from the dashboard</span>
+                <span>Copy your RapidAPI key from the dashboard</span>
               </li>
               <li className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 bg-white/20 rounded-full flex items-center justify-center text-xs font-bold">
