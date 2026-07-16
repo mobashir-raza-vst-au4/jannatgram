@@ -8,6 +8,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [content, setContent] = useState<InstagramContent | null>(null);
+  const [downloadingIndex, setDownloadingIndex] = useState<number | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,7 +52,8 @@ export default function Home() {
     return forDownload ? `${base}&download=true` : base;
   };
 
-  const downloadMedia = async (media: MediaItem, index: number) => {
+  const downloadMedia = async (media: MediaItem, index: number, trackState = true) => {
+    if (trackState) setDownloadingIndex(index);
     try {
       const proxyUrl = getProxyUrl(media.url, true);
       const response = await fetch(proxyUrl);
@@ -70,17 +73,24 @@ export default function Home() {
     } catch {
       // Fallback: open in new tab
       window.open(media.url, "_blank");
+    } finally {
+      if (trackState) setDownloadingIndex(null);
     }
   };
 
   const downloadAll = async () => {
     if (!content) return;
-    for (let i = 0; i < content.media.length; i++) {
-      await downloadMedia(content.media[i], i);
-      // Small delay between downloads
-      if (i < content.media.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+    setDownloadingAll(true);
+    try {
+      for (let i = 0; i < content.media.length; i++) {
+        await downloadMedia(content.media[i], i, false);
+        // Small delay between downloads
+        if (i < content.media.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
       }
+    } finally {
+      setDownloadingAll(false);
     }
   };
 
@@ -304,22 +314,50 @@ export default function Home() {
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
                         <button
                           onClick={() => downloadMedia(media, index)}
-                          className="px-4 py-2 bg-white rounded-lg font-semibold text-gray-800 hover:bg-gray-100 transition-colors flex items-center gap-2"
+                          disabled={downloadingIndex === index || downloadingAll}
+                          className="px-4 py-2 bg-white rounded-lg font-semibold text-gray-800 hover:bg-gray-100 transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
                         >
-                          <svg
-                            className="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                            />
-                          </svg>
-                          Download
+                          {downloadingIndex === index ? (
+                            <>
+                              <svg
+                                className="animate-spin w-5 h-5"
+                                viewBox="0 0 24 24"
+                              >
+                                <circle
+                                  className="opacity-25"
+                                  cx="12"
+                                  cy="12"
+                                  r="10"
+                                  stroke="currentColor"
+                                  strokeWidth="4"
+                                  fill="none"
+                                />
+                                <path
+                                  className="opacity-75"
+                                  fill="currentColor"
+                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                />
+                              </svg>
+                              Downloading...
+                            </>
+                          ) : (
+                            <>
+                              <svg
+                                className="w-5 h-5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                                />
+                              </svg>
+                              Download
+                            </>
+                          )}
                         </button>
                       </div>
 
@@ -342,23 +380,51 @@ export default function Home() {
                 {/* Download All Button */}
                 <button
                   onClick={downloadAll}
-                  className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+                  disabled={downloadingAll || downloadingIndex !== null}
+                  className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                    />
-                  </svg>
-                  Download All ({content.media.length}{" "}
-                  {content.media.length === 1 ? "file" : "files"})
+                  {downloadingAll ? (
+                    <>
+                      <svg
+                        className="animate-spin w-5 h-5"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                          fill="none"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        />
+                      </svg>
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                        />
+                      </svg>
+                      Download All ({content.media.length}{" "}
+                      {content.media.length === 1 ? "file" : "files"})
+                    </>
+                  )}
                 </button>
               </div>
             )}
