@@ -65,6 +65,7 @@ export default function Home() {
   const [ytError, setYtError] = useState("");
   const [ytContent, setYtContent] = useState<YouTubeContent | null>(null);
   const [ytDownloadingKey, setYtDownloadingKey] = useState<string | null>(null);
+  const [redirecting, setRedirecting] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,9 +161,14 @@ export default function Home() {
       return;
     }
 
-    // This host has no backend (Vercel) — send the user to the downloader app.
+    // This host has no backend (Vercel) — send the user to the downloader app,
+    // carrying the URL so it auto-fills + fetches there. Show a brief animation.
     if (YT_REDIRECT) {
-      window.location.href = `${YT_REDIRECT.replace(/\/$/, "")}/?ytUrl=${encodeURIComponent(trimmed)}`;
+      setRedirecting(trimmed);
+      const target = `${YT_REDIRECT.replace(/\/$/, "")}/?ytUrl=${encodeURIComponent(trimmed)}`;
+      window.setTimeout(() => {
+        window.location.href = target;
+      }, 1600);
       return;
     }
 
@@ -242,6 +248,41 @@ export default function Home() {
 
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600">
+      {/* Redirect animation: shown briefly on the Vercel site before handing
+          off to the downloader app (which auto-fills + fetches the URL). */}
+      {redirecting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-red-500/95 via-rose-600/95 to-purple-700/95 backdrop-blur-sm">
+          <style>{`@keyframes jt-bar{from{width:0%}to{width:100%}}@keyframes jt-fly{0%,100%{transform:translateX(-5px)}50%{transform:translateX(5px)}}`}</style>
+          <div className="text-center px-8 max-w-md">
+            <div className="relative mx-auto mb-6 w-20 h-20">
+              <div className="absolute inset-0 rounded-full border-4 border-white/25 border-t-white animate-spin" />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8 text-white"
+                  style={{ animation: "jt-fly 1s ease-in-out infinite" }}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                </svg>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Opening JannaTube…</h2>
+            <p className="text-white/80 mb-1">
+              Taking you to the downloader for high-quality video &amp; audio.
+            </p>
+            <p className="text-white/60 text-sm truncate mb-6">{redirecting}</p>
+            <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-white rounded-full"
+                style={{ animation: "jt-bar 1.6s linear forwards" }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* YouTube gradient cross-fades in over the base gradient on tab switch */}
       <div
         className={`pointer-events-none fixed inset-0 bg-gradient-to-br from-red-500 via-rose-600 to-purple-800 transition-opacity duration-700 ease-in-out ${
